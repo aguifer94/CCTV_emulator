@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Simulador FOV Hikvision</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { height:100%; overflow:hidden; background:#000; font-family:'Courier New',monospace; }
+
+  #stage {
+    position:fixed; inset:0; background:#000;
+    display:flex; align-items:center; justify-content:center;
+    overflow:hidden;
+  }
+
+  #photo {
+    position:absolute; top:50%; left:50%;
+    transform: translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    min-width:100%; min-height:100%;
+    object-fit:cover;
+    transition: transform 0.15s ease-out;
+    display:none;
+  }
+
+  #emptyState {
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:14px; color:#666;
+    text-align:center; padding:30px;
+  }
+  #emptyState.hidden { display:none; }
+  #emptyState .big-icon { font-size:48px; opacity:0.5; }
+  #emptyState p { font-size:13px; max-width:280px; line-height:1.5; }
+
+  #hud {
+    position:absolute; inset:0; pointer-events:none;
+    color:#e8e8e8;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.9);
+  }
+  .hud-top-left {
+    position:absolute; top:8px; left:10px;
+    font-size:13px; line-height:1.5; letter-spacing:0.5px;
+  }
+  .hud-top-right {
+    position:absolute; top:8px; right:10px;
+    font-size:13px; text-align:right; line-height:1.5;
+  }
+  .hud-bottom-left {
+    position:absolute; bottom:8px; left:10px;
+    font-size:12px; line-height:1.4; opacity:0.9;
+  }
+  .hud-bottom-right {
+    position:absolute; bottom:8px; right:10px;
+    font-size:13px; text-align:right;
+  }
+  .rec-dot {
+    display:inline-block; width:8px; height:8px; border-radius:50%;
+    background:#ff3b30; margin-right:6px; vertical-align:middle;
+    animation:blink 1.2s infinite;
+  }
+  @keyframes blink { 0%,50%{opacity:1;} 51%,100%{opacity:0.25;} }
+
+  .crosshair {
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    width:30px; height:30px; opacity:0.5;
+  }
+  .crosshair::before, .crosshair::after {
+    content:''; position:absolute; background:#fff;
+  }
+  .crosshair::before { width:100%; height:1px; top:50%; left:0; }
+  .crosshair::after { width:1px; height:100%; left:50%; top:0; }
+
+  .frame-corner {
+    position:absolute; width:18px; height:18px;
+    border-color:rgba(255,255,255,0.6); opacity:0.7;
+  }
+  .fc-tl { top:30px; left:14px; border-top:2px solid; border-left:2px solid; }
+  .fc-tr { top:30px; right:14px; border-top:2px solid; border-right:2px solid; }
+  .fc-bl { bottom:34px; left:14px; border-bottom:2px solid; border-left:2px solid; }
+  .fc-br { bottom:34px; right:14px; border-bottom:2px solid; border-right:2px solid; }
+
+  .warn-banner {
+    position:absolute; top:42px; left:50%; transform:translateX(-50%);
+    background:rgba(180,30,20,0.92); color:#fff; font-size:11.5px;
+    padding:6px 12px; border-radius:6px; max-width:88%; text-align:center;
+    display:none; pointer-events:none; line-height:1.4;
+  }
+  .warn-banner.show { display:block; }
+
+  #controls {
+    position:fixed; left:0; right:0; bottom:0;
+    background:linear-gradient(180deg, rgba(15,15,15,0.0), rgba(10,10,10,0.95) 30%);
+    padding:14px 12px calc(14px + env(safe-area-inset-bottom));
+    z-index:20;
+    display:flex; flex-direction:column; gap:10px;
+  }
+
+  .lens-row {
+    display:flex; gap:8px; justify-content:center;
+  }
+  .lens-btn {
+    flex:1; max-width:90px;
+    background:rgba(255,255,255,0.08);
+    border:1px solid rgba(255,255,255,0.25);
+    color:#fff; font-family:inherit; font-size:14px; font-weight:bold;
+    padding:10px 4px; border-radius:8px;
+    text-align:center;
+  }
+  .lens-btn.active { background:#ffb800; color:#111; border-color:#ffb800; }
+  .lens-btn small { display:block; font-size:10px; font-weight:normal; opacity:0.8; margin-top:2px; }
+
+  .action-row { display:flex; gap:8px; align-items:center; }
+  .icon-btn {
+    background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.25);
+    color:#fff; border-radius:50%; width:46px; height:46px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:18px; flex-shrink:0;
+  }
+  .shutter-btn {
+    flex:1; background:#fff; color:#111; border:none;
+    border-radius:24px; padding:13px; font-weight:bold; font-size:15px;
+    font-family:inherit;
+  }
+  .shutter-btn:active { background:#ddd; }
+
+  .model-select-row { display:flex; gap:8px; }
+  select#modelSelect {
+    flex:1; background:rgba(255,255,255,0.08); color:#fff;
+    border:1px solid rgba(255,255,255,0.25); border-radius:8px;
+    padding:9px; font-family:inherit; font-size:12px;
+  }
+  .calib-btn {
+    background:rgba(126,200,255,0.18); border:1px solid #7ec8ff; color:#7ec8ff;
+    border-radius:8px; padding:9px 12px; font-family:inherit; font-size:12px; font-weight:bold;
+    white-space:nowrap;
+  }
+  .fov-tag {
+    text-align:center; font-size:11px; color:#7ec8ff; opacity:0.9;
+  }
+
+  #status {
+    position:fixed; top:0; left:0; right:0; z-index:30;
+    padding:10px 14px; padding-top:calc(10px + env(safe-area-inset-top));
+    background:rgba(20,20,20,0.92); color:#fff; font-size:13px;
+    text-align:center; display:none;
+  }
+  #status.show { display:block; }
+  #status a { color:#7ec8ff; }
+
+  #startOverlay {
+    position:fixed; inset:0; background:#0a0a0a; z-index:50;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    color:#fff; text-align:center; padding:30px; gap:18px;
+  }
+  #startOverlay h1 { font-size:18px; font-weight:bold; color:#ffb800; letter-spacing:1px; }
+  #startOverlay p { font-size:13px; opacity:0.75; max-width:340px; line-height:1.6; }
+  #startBtn {
+    background:#ffb800; color:#111; border:none; padding:14px 38px;
+    border-radius:24px; font-weight:bold; font-size:15px; font-family:inherit;
+  }
+
+  canvas#captureCanvas { display:none; }
+
+  #captureModal {
+    position:fixed; inset:0; background:rgba(0,0,0,0.96); z-index:60;
+    display:none; flex-direction:column; align-items:center; justify-content:center;
+    padding:16px; gap:14px;
+  }
+  #captureModal.show { display:flex; }
+  #captureModal img { max-width:100%; max-height:70vh; border-radius:4px; }
+  .modal-btns { display:flex; gap:10px; }
+  .modal-btns button {
+    padding:11px 22px; border-radius:20px; border:none; font-family:inherit;
+    font-weight:bold; font-size:14px;
+  }
+  .btn-save { background:#ffb800; color:#111; }
+  .btn-close { background:rgba(255,255,255,0.15); color:#fff; }
+
+  /* ---- Modal de calibración ---- */
+  #calibModal {
+    position:fixed; inset:0; background:rgba(0,0,0,0.97); z-index:70;
+    display:none; flex-direction:column; padding:16px;
+    padding-top:calc(16px + env(safe-area-inset-top));
+    padding-bottom:calc(16px + env(safe-area-inset-bottom));
+    color:#fff; gap:12px; overflow-y:auto;
+  }
+  #calibModal.show { display:flex; }
+  #calibModal h2 { font-size:16px; color:#ffb800; }
+  #calibModal p { font-size:12.5px; line-height:1.5; opacity:0.85; }
+  #calibModal .step { display:none; flex-direction:column; gap:12px; flex:1; }
+  #calibModal .step.active { display:flex; }
+  #calibStage {
+    position:relative; width:100%; flex:1; min-height:200px;
+    background:#111; border-radius:8px; overflow:hidden;
+    display:flex; align-items:center; justify-content:center;
+  }
+  #calibImg { max-width:100%; max-height:100%; display:block; }
+  #calibLineLayer { position:absolute; inset:0; }
+  .calib-handle {
+    position:absolute; top:50%; width:34px; height:34px; transform:translate(-50%,-50%);
+    border-radius:50%; background:rgba(255,184,0,0.9); border:2px solid #fff;
+    display:flex; align-items:center; justify-content:center; font-size:12px; color:#111; font-weight:bold;
+  }
+  .calib-input-row { display:flex; gap:8px; align-items:center; }
+  .calib-input-row label { font-size:12.5px; flex:1; }
+  .calib-input-row input {
+    width:90px; padding:8px; border-radius:6px; border:1px solid rgba(255,255,255,0.3);
+    background:rgba(255,255,255,0.08); color:#fff; font-family:inherit; font-size:14px;
+    text-align:center;
+  }
+  .calib-btns { display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
+  .calib-btns button {
+    padding:11px 18px; border-radius:20px; border:none; font-family:inherit;
+    font-weight:bold; font-size:13.5px;
+  }
+  .btn-primary { background:#ffb800; color:#111; }
+  .btn-secondary { background:rgba(255,255,255,0.12); color:#fff; }
+  .calib-result {
+    background:rgba(126,200,255,0.12); border:1px solid #7ec8ff; border-radius:8px;
+    padding:12px; font-size:13px; text-align:center;
+  }
+  .calib-result b { color:#7ec8ff; font-size:18px; }
+  .calib-file-btn {
+    background:rgba(255,184,0,0.15); border:1px dashed #ffb800; color:#ffb800;
+    border-radius:8px; padding:14px; text-align:center; font-size:13px; font-weight:bold;
+  }
+
+  input#photoInput, input#calibPhotoInput { display:none; }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <img id="photo" alt="Foto cargada">
+  <div id="emptyState">
+    <div class="big-icon">📷</div>
+    <p>Todavía no cargaste ninguna foto.<br>Sacá una con tu app de cámara nativa en modo <b>ultra gran angular (0.5x)</b> y subila acá abajo.</p>
+  </div>
+  <div id="hud">
+    <div class="hud-top-left" id="cameraLabel">CAM 01</div>
+    <div class="hud-top-right" id="datetime">--:--:--<br>--/--/----</div>
+    <div class="hud-bottom-left" id="lensInfo">LENTE: 4mm | FOV-H: 90.2°</div>
+    <div class="hud-bottom-right"><span class="rec-dot"></span>REC</div>
+    <div class="crosshair"></div>
+    <div class="frame-corner fc-tl"></div>
+    <div class="frame-corner fc-tr"></div>
+    <div class="frame-corner fc-bl"></div>
+    <div class="frame-corner fc-br"></div>
+    <div class="warn-banner" id="warnBanner"></div>
+  </div>
+</div>
+
+<div id="status"></div>
+
+<div id="controls">
+  <div class="model-select-row">
+    <select id="modelSelect"></select>
+    <button class="calib-btn" id="calibBtn">📐 Calibrar</button>
+  </div>
+  <div class="fov-tag" id="fovTag">Elegí tu modelo de celular arriba</div>
+
+  <div class="lens-row" id="lensRow">
+    <button class="lens-btn" data-mm="2.8">2.8mm<small>112°</small></button>
+    <button class="lens-btn" data-mm="3.6">3.6mm<small>85°</small></button>
+    <button class="lens-btn active" data-mm="4">4mm<small>90°</small></button>
+    <button class="lens-btn" data-mm="6">6mm<small>~53°</small></button>
+    <button class="lens-btn" data-mm="8">8mm<small>~40°</small></button>
+  </div>
+  <div class="action-row">
+    <button class="icon-btn" id="infoBtn" title="Info">ⓘ</button>
+    <button class="shutter-btn" id="loadPhotoBtn">📁 Cargar foto ultra wide</button>
+  </div>
+</div>
+
+<div id="startOverlay">
+  <h1>🎥 SIMULADOR FOV HIKVISION</h1>
+  <p>Esta app recorta digitalmente una foto sacada con la cámara <b>ultra gran angular</b> de tu celular para mostrarte el ángulo de visión aproximado de una cámara domo/bullet Hikvision fija de 2.8, 3.6, 4, 6 u 8mm.</p>
+  <p style="font-size:11.5px; opacity:0.7;">1) Sacá una foto con tu app de cámara nativa en modo 0.5x (ultra wide).<br>2) Subila acá.<br>3) Elegí tu modelo de celular o calibrá manualmente.</p>
+  <button id="startBtn">Empezar</button>
+</div>
+
+<div id="captureModal">
+  <img id="capturedImg" alt="Captura">
+  <div class="modal-btns">
+    <button class="btn-save" id="saveBtn">Guardar imagen</button>
+    <button class="btn-close" id="closeModalBtn">Cerrar</button>
+  </div>
+</div>
+
+<!-- ---- Modal de calibración manual con regla, sobre foto fija ---- -->
+<div id="calibModal">
+  <h2>📐 Calibración manual de FOV</h2>
+
+  <div class="step active" id="calibStep1">
+    <p>Esta calibración es para cuando tu modelo de celular no está en la lista, o si querés afinar el valor precargado.</p>
+    <p>Necesitás una foto (sacada con tu app nativa en modo ultra wide) donde se vea un objeto de ancho conocido y bien visible — marco de puerta, baldosa, cinta métrica pegada a la pared — y que sepas a qué distancia estabas parado cuando la sacaste.</p>
+    <div class="calib-btns">
+      <button class="btn-secondary" id="calibCancel1">Cancelar</button>
+      <button class="btn-primary" id="calibNext1">Siguiente →</button>
+    </div>
+  </div>
+
+  <div class="step" id="calibStep2">
+    <p>Subí esa foto de referencia:</p>
+    <div id="calibStage">
+      <div class="calib-file-btn" id="calibFileBtnWrapper" style="width:100%;">📁 Elegir foto de referencia</div>
+      <img id="calibImg" style="display:none;">
+      <div id="calibLineLayer" style="display:none;">
+        <div class="calib-handle" id="handleA" style="left:30%;">A</div>
+        <div class="calib-handle" id="handleB" style="left:70%;">B</div>
+      </div>
+    </div>
+    <input type="file" id="calibPhotoInput" accept="image/*">
+    <p style="opacity:0.7; font-size:11.5px;" id="calibStep2Hint">Una vez cargada, arrastrá los dos marcadores ⬤ hasta los extremos del objeto conocido.</p>
+    <div class="calib-btns">
+      <button class="btn-secondary" id="calibBack2">← Atrás</button>
+      <button class="btn-primary" id="calibNext2">Siguiente →</button>
+    </div>
+  </div>
+
+  <div class="step" id="calibStep3">
+    <div class="calib-input-row">
+      <label>Ancho real entre A y B (metros):</label>
+      <input type="number" id="realWidthInput" value="0.80" step="0.01" min="0.01">
+    </div>
+    <div class="calib-input-row">
+      <label>Distancia del celular a la pared (metros):</label>
+      <input type="number" id="distanceInput" value="2.00" step="0.05" min="0.1">
+    </div>
+    <p style="opacity:0.6; font-size:11.5px;">Tip: medí la distancia con pasos (~0.7m por paso) si no tenés cinta larga.</p>
+    <div class="calib-btns">
+      <button class="btn-secondary" id="calibBack3">← Atrás</button>
+      <button class="btn-primary" id="calibCalcBtn">Calcular FOV</button>
+    </div>
+  </div>
+
+  <div class="step" id="calibStep4">
+    <div class="calib-result" id="calibResultBox">
+      FOV horizontal calculado: <b id="calibResultValue">--°</b>
+    </div>
+    <p style="opacity:0.7;">Este valor queda guardado como tu FOV calibrado y se va a usar para recortar las lentes Hikvision en las fotos que cargues de ahora en más.</p>
+    <div class="calib-btns">
+      <button class="btn-secondary" id="calibRedo">Repetir</button>
+      <button class="btn-primary" id="calibApply">Aplicar y cerrar</button>
+    </div>
+  </div>
+</div>
+
+<canvas id="captureCanvas"></canvas>
+<input type="file" id="photoInput" accept="image/*" capture="environment">
+
+<script>
+(function(){
+  "use strict";
+
+  // Datos de datasheet Hikvision: horizontal (h), vertical (v), diagonal (d) en grados.
+  const LENS_FOV = {
+    "2.8": { h: 112.1, v: 60.0, d: 132.2, source: "datasheet" },
+    "3.6": { h: 85,    v: null, d: null,  source: "datasheet" },
+    "4":   { h: 90.2,  v: 48.6, d: 107.6, source: "datasheet" },
+    "6":   { h: 53,    v: null, d: null,  source: "generico" },
+    "8":   { h: 40,    v: null, d: null,  source: "generico" }
+  };
+
+  // Modelos de celular precargados: FOV horizontal real (o estimado a partir de datasheet)
+  // de su cámara ultra gran angular. "custom" = sin precargar, requiere calibración manual.
+  const PHONE_MODELS = {
+    "moto_g75": { label: "Motorola Moto G75 5G", fov: 107, note: "Estimado desde datasheet (118.6° diagonal Motorola)" },
+    "custom":   { label: "Otro modelo / Calibrar manualmente", fov: null, note: "" }
+  };
+
+  let currentMM = "4";
+  let deviceFOV = null;   // FOV horizontal actual a usar para el recorte
+  let photoLoaded = false;
+  let calibratedFOV = null; // FOV calibrado manualmente, persiste en localStorage
+
+  const photoEl = document.getElementById('photo');
+  const emptyState = document.getElementById('emptyState');
+  const startOverlay = document.getElementById('startOverlay');
+  const startBtn = document.getElementById('startBtn');
+  const statusEl = document.getElementById('status');
+  const lensRow = document.getElementById('lensRow');
+  const lensInfo = document.getElementById('lensInfo');
+  const datetimeEl = document.getElementById('datetime');
+  const cameraLabel = document.getElementById('cameraLabel');
+  const loadPhotoBtn = document.getElementById('loadPhotoBtn');
+  const infoBtn = document.getElementById('infoBtn');
+  const captureCanvas = document.getElementById('captureCanvas');
+  const captureModal = document.getElementById('captureModal');
+  const capturedImg = document.getElementById('capturedImg');
+  const saveBtn = document.getElementById('saveBtn');
+  const closeModalBtn = document.getElementById('closeModalBtn');
+  const modelSelect = document.getElementById('modelSelect');
+  const calibBtn = document.getElementById('calibBtn');
+  const fovTag = document.getElementById('fovTag');
+  const warnBanner = document.getElementById('warnBanner');
+  const photoInput = document.getElementById('photoInput');
+
+  // ---- localStorage persist ----
+  function loadCalibStore(){
+    try { calibratedFOV = JSON.parse(localStorage.getItem('hikfov_calib_manual') || 'null'); }
+    catch(e){ calibratedFOV = null; }
+  }
+  function saveCalibStore(){
+    try { localStorage.setItem('hikfov_calib_manual', JSON.stringify(calibratedFOV)); } catch(e){}
+  }
+  loadCalibStore();
+
+  function loadModelChoice(){
+    try { return localStorage.getItem('hikfov_model') || 'moto_g75'; } catch(e){ return 'moto_g75'; }
+  }
+  function saveModelChoice(val){
+    try { localStorage.setItem('hikfov_model', val); } catch(e){}
+  }
+
+  function showStatus(msg, isError){
+    statusEl.innerHTML = msg;
+    statusEl.style.background = isError ? 'rgba(120,20,20,0.92)' : 'rgba(20,20,20,0.92)';
+    statusEl.classList.add('show');
+  }
+  function hideStatus(){ statusEl.classList.remove('show'); }
+
+  function updateClock(){
+    const now = new Date();
+    const pad = n => String(n).padStart(2,'0');
+    datetimeEl.innerHTML = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}<br>${pad(now.getDate())}/${pad(now.getMonth()+1)}/${now.getFullYear()}`;
+  }
+  setInterval(updateClock, 1000);
+  updateClock();
+
+  // ---- Poblar selector de modelos ----
+  function populateModelSelect(){
+    modelSelect.innerHTML = '';
+    Object.entries(PHONE_MODELS).forEach(([key, data])=>{
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = data.fov ? `${data.label} (${data.fov}°)` : data.label;
+      modelSelect.appendChild(opt);
+    });
+    const saved = loadModelChoice();
+    if ([...modelSelect.options].some(o=>o.value===saved)){
+      modelSelect.value = saved;
+    }
+  }
+  populateModelSelect();
+
+  function updateFovTag(){
+    const key = modelSelect.value;
+    const modelData = PHONE_MODELS[key];
+
+    if (key === 'custom'){
+      if (calibratedFOV){
+        deviceFOV = calibratedFOV;
+        fovTag.innerHTML = `FOV calibrado manualmente: <b style="color:#ffb800">${calibratedFOV.toFixed(1)}°</b>`;
+      } else {
+        deviceFOV = null;
+        fovTag.innerHTML = `Sin calibrar todavía — tocá 📐 Calibrar para medir el FOV real de tu celular`;
+      }
+    } else {
+      // Si ya calibró manualmente para este modelo puntual, priorizamos eso (más preciso)
+      if (calibratedFOV){
+        deviceFOV = calibratedFOV;
+        fovTag.innerHTML = `${modelData.label} — FOV calibrado manualmente: <b style="color:#ffb800">${calibratedFOV.toFixed(1)}°</b>`;
+      } else {
+        deviceFOV = modelData.fov;
+        fovTag.innerHTML = `${modelData.label} — FOV estimado: <b style="color:#ffb800">${modelData.fov}°</b> <span style="opacity:0.7;">(${modelData.note})</span>`;
+      }
+    }
+  }
+
+  modelSelect.addEventListener('change', ()=>{
+    saveModelChoice(modelSelect.value);
+    updateFovTag();
+    applyCrop();
+  });
+
+  function applyCrop(){
+    if (!photoLoaded) return;
+    const targetFOV = LENS_FOV[currentMM].h;
+    const baseFOV = deviceFOV;
+
+    if (!baseFOV){
+      warnBanner.textContent = `⚠️ No hay un FOV base definido todavía. Elegí tu modelo o calibrá manualmente.`;
+      warnBanner.classList.add('show');
+      photoEl.style.transform = `translate(-50%,-50%) scale(1)`;
+      return;
+    }
+
+    let scale = baseFOV / targetFOV;
+
+    if (scale < 1){
+      warnBanner.textContent = `⚠️ Tu cámara (${baseFOV.toFixed(0)}°) tiene MENOS ángulo que el lente ${currentMM}mm (${targetFOV}°). No se puede simular esta lente con esta foto.`;
+      warnBanner.classList.add('show');
+      scale = 1;
+    } else {
+      warnBanner.classList.remove('show');
+    }
+    if (scale > 6) scale = 6;
+    photoEl.style.transform = `translate(-50%,-50%) scale(${scale.toFixed(3)})`;
+  }
+
+  function setLens(mm){
+    currentMM = mm;
+    document.querySelectorAll('.lens-btn').forEach(b=>{
+      b.classList.toggle('active', b.dataset.mm === mm);
+    });
+    const lensData = LENS_FOV[mm];
+    let infoText = `LENTE: ${mm}mm | FOV-H: ${lensData.h}°`;
+    if (lensData.v) infoText += ` | V: ${lensData.v}°`;
+    if (lensData.d) infoText += ` | D: ${lensData.d}°`;
+    lensInfo.textContent = infoText;
+    applyCrop();
+  }
+
+  lensRow.addEventListener('click', (e)=>{
+    const btn = e.target.closest('.lens-btn');
+    if(!btn) return;
+    setLens(btn.dataset.mm);
+  });
+
+  // ---- Cargar foto principal ----
+  function loadPhotoFile(file, callback){
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e)=> callback(e.target.result);
+    reader.readAsDataURL(file);
+  }
+
+  loadPhotoBtn.addEventListener('click', ()=> photoInput.click());
+
+  photoInput.addEventListener('change', (e)=>{
+    const file = e.target.files[0];
+    if (!file) return;
+    loadPhotoFile(file, (dataUrl)=>{
+      photoEl.src = dataUrl;
+      photoEl.style.display = 'block';
+      emptyState.classList.add('hidden');
+      photoLoaded = true;
+      startOverlay.style.display = 'none';
+      updateFovTag();
+      applyCrop();
+    });
+  });
+
+  startBtn.addEventListener('click', ()=>{
+    startOverlay.style.display = 'none';
+  });
+
+  infoBtn.addEventListener('click', ()=>{
+    showStatus(
+      `Esta app recorta digitalmente una foto sacada con la cámara ultra gran angular de tu celular. ` +
+      `Elegí tu modelo en la lista de arriba (si está disponible) o calibrá manualmente con 📐 para mayor precisión. ` +
+      `<br><a href="#" id="closeStatusLink">cerrar</a>`
+    );
+    document.getElementById('closeStatusLink').addEventListener('click',(e)=>{e.preventDefault(); hideStatus();});
+  });
+
+  // ---- Captura del encuadre recortado ----
+  function captureCroppedFrame(){
+    if (!photoLoaded || !photoEl.naturalWidth) return;
+    const lensData = LENS_FOV[currentMM];
+    const targetFOV = lensData.h;
+    const baseFOV = deviceFOV || targetFOV;
+    let scale = baseFOV / targetFOV;
+    if (scale < 1) scale = 1;
+    if (scale > 6) scale = 6;
+
+    // Calcular el recorte central considerando que object-fit:cover puede cortar
+    // distinto según relación de aspecto de pantalla vs imagen. Usamos el tamaño
+    // natural de la imagen directamente para la captura, recortado al centro.
+    const iw = photoEl.naturalWidth, ih = photoEl.naturalHeight;
+    const cropW = iw / scale, cropH = ih / scale;
+    const sx = (iw - cropW) / 2, sy = (ih - cropH) / 2;
+
+    captureCanvas.width = cropW; captureCanvas.height = cropH;
+    const ctx = captureCanvas.getContext('2d');
+    ctx.drawImage(photoEl, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+
+    const now = new Date();
+    const pad = n => String(n).padStart(2,'0');
+    const ts = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())} ${pad(now.getDate())}/${pad(now.getMonth()+1)}/${now.getFullYear()}`;
+    ctx.font = `${Math.max(14, cropW*0.025)}px monospace`;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, cropH - cropH*0.07, cropW, cropH*0.07);
+    ctx.fillStyle = '#fff';
+    let stamp = `LENTE ${currentMM}mm  |  FOV-H ${targetFOV}°`;
+    if (lensData.v) stamp += `  V ${lensData.v}°`;
+    if (lensData.d) stamp += `  D ${lensData.d}°`;
+    stamp += `  |  base cam ${baseFOV.toFixed(0)}°  |  ${ts}`;
+    ctx.fillText(stamp, cropW*0.015, cropH - cropH*0.022);
+
+    capturedImg.src = captureCanvas.toDataURL('image/jpeg', 0.92);
+    captureModal.classList.add('show');
+  }
+
+  // Tap en la imagen principal también captura el encuadre actual (acceso rápido)
+  photoEl.addEventListener('click', captureCroppedFrame);
+
+  saveBtn.addEventListener('click', ()=>{
+    const a = document.createElement('a');
+    a.href = capturedImg.src;
+    a.download = `hik-sim-${currentMM}mm-${Date.now()}.jpg`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
+
+  closeModalBtn.addEventListener('click', ()=> captureModal.classList.remove('show'));
+
+  // =========================================================
+  // ---- CALIBRACIÓN MANUAL SOBRE FOTO FIJA ----
+  // =========================================================
+  const calibModal = document.getElementById('calibModal');
+  const calibImg = document.getElementById('calibImg');
+  const calibFileBtnWrapper = document.getElementById('calibFileBtnWrapper');
+  const calibPhotoInput = document.getElementById('calibPhotoInput');
+  const calibLineLayer = document.getElementById('calibLineLayer');
+  const steps = {
+    1: document.getElementById('calibStep1'),
+    2: document.getElementById('calibStep2'),
+    3: document.getElementById('calibStep3'),
+    4: document.getElementById('calibStep4'),
+  };
+  const calibStage = document.getElementById('calibStage');
+  const handleA = document.getElementById('handleA');
+  const handleB = document.getElementById('handleB');
+  const realWidthInput = document.getElementById('realWidthInput');
+  const distanceInput = document.getElementById('distanceInput');
+  const calibResultValue = document.getElementById('calibResultValue');
+
+  let lastComputedFOV = null;
+  let calibImageLoaded = false;
+
+  function showStep(n){
+    Object.values(steps).forEach(s=>s.classList.remove('active'));
+    steps[n].classList.add('active');
+  }
+
+  function openCalibModal(){
+    calibModal.classList.add('show');
+    showStep(1);
+  }
+  function closeCalibModal(){
+    calibModal.classList.remove('show');
+  }
+
+  calibBtn.addEventListener('click', openCalibModal);
+  document.getElementById('calibCancel1').addEventListener('click', closeCalibModal);
+
+  document.getElementById('calibNext1').addEventListener('click', ()=> showStep(2));
+  document.getElementById('calibBack2').addEventListener('click', ()=> showStep(1));
+  document.getElementById('calibNext2').addEventListener('click', ()=>{
+    if (!calibImageLoaded){
+      alert('Primero subí una foto de referencia.');
+      return;
+    }
+    showStep(3);
+  });
+  document.getElementById('calibBack3').addEventListener('click', ()=> showStep(2));
+
+  calibFileBtnWrapper.addEventListener('click', ()=> calibPhotoInput.click());
+
+  calibPhotoInput.addEventListener('change', (e)=>{
+    const file = e.target.files[0];
+    if (!file) return;
+    loadPhotoFile(file, (dataUrl)=>{
+      calibImg.src = dataUrl;
+      calibImg.style.display = 'block';
+      calibFileBtnWrapper.style.display = 'none';
+      calibLineLayer.style.display = 'block';
+      calibImageLoaded = true;
+    });
+  });
+
+  function makeDraggable(handle){
+    let dragging = false;
+    function move(clientX){
+      const rect = calibStage.getBoundingClientRect();
+      let pct = ((clientX - rect.left) / rect.width) * 100;
+      pct = Math.max(0, Math.min(100, pct));
+      handle.style.left = pct + '%';
+    }
+    handle.addEventListener('touchstart', (e)=>{ dragging=true; e.preventDefault(); }, {passive:false});
+    handle.addEventListener('touchmove', (e)=>{
+      if(!dragging) return;
+      move(e.touches[0].clientX);
+      e.preventDefault();
+    }, {passive:false});
+    handle.addEventListener('touchend', ()=> dragging=false);
+
+    handle.addEventListener('mousedown', (e)=>{ dragging=true; e.preventDefault(); });
+    window.addEventListener('mousemove', (e)=>{ if(dragging) move(e.clientX); });
+    window.addEventListener('mouseup', ()=> dragging=false);
+  }
+  makeDraggable(handleA);
+  makeDraggable(handleB);
+
+  document.getElementById('calibCalcBtn').addEventListener('click', ()=>{
+    const realWidth = parseFloat(realWidthInput.value);
+    const distance = parseFloat(distanceInput.value);
+    if (!realWidth || !distance || realWidth<=0 || distance<=0){
+      alert('Ingresá valores válidos de ancho y distancia.');
+      return;
+    }
+    const rect = calibStage.getBoundingClientRect();
+    const pctA = parseFloat(handleA.style.left);
+    const pctB = parseFloat(handleB.style.left);
+    const pxDist = Math.abs(pctB - pctA) / 100 * rect.width;
+    const fracOfFrame = pxDist / rect.width;
+
+    if (fracOfFrame <= 0.01){
+      alert('Los marcadores están muy juntos, separalos más sobre el objeto de referencia.');
+      return;
+    }
+
+    // OJO: esto mide el FOV del encuadre tal como se ve en pantalla (que con
+    // object-fit:contain en el modal de calibración corresponde al ancho total
+    // de la foto), asumiendo que A-B están sobre el objeto real y el resto de
+    // la imagen es directamente lo que la cámara capturó (sin recorte previo).
+    const totalVisibleWidth = realWidth / fracOfFrame;
+    const fovRad = 2 * Math.atan((totalVisibleWidth/2) / distance);
+    const fovDeg = fovRad * (180/Math.PI);
+
+    lastComputedFOV = fovDeg;
+    calibResultValue.textContent = fovDeg.toFixed(1) + '°';
+    showStep(4);
+  });
+
+  document.getElementById('calibRedo').addEventListener('click', ()=> showStep(2));
+
+  document.getElementById('calibApply').addEventListener('click', ()=>{
+    if (lastComputedFOV){
+      calibratedFOV = lastComputedFOV;
+      saveCalibStore();
+      updateFovTag();
+      applyCrop();
+    }
+    closeCalibModal();
+  });
+
+  // ---- Init ----
+  updateFovTag();
+  setLens("4");
+})();
+</script>
+</body>
+</html>
