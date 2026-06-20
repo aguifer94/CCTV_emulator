@@ -18,14 +18,14 @@
             display: flex;
             flex-direction: column;
             height: 100vh;
-            height: 100dvh; /* Ajuste dinámico para pantallas móviles */
+            height: 100dvh;
             overflow: hidden;
         }
 
         .video-container {
             position: relative;
             width: 100%;
-            flex: 1; /* Ocupa el espacio restante disponible de forma segura */
+            flex: 1;
             background: #000;
             overflow: hidden;
             display: flex;
@@ -51,7 +51,6 @@
             align-items: center;
             box-shadow: 0 -4px 15px rgba(0,0,0,0.6);
             z-index: 10;
-            /* Respetar la barra de gestos inferior en teléfonos modernos */
             padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); 
         }
 
@@ -109,7 +108,7 @@
 <body>
 
     <div class="video-container">
-        <div class="info-overlay" id="info">Lente: 2.8mm (FOV: ~104°)<br><small style="color: #bbb;">Usa el lente 0.5x de tu celular para precisión</small></div>
+        <div class="info-overlay" id="info">Lente: 2.8mm (FOV: ~104°)<br><small style="color: #bbb;">Forzando inicialización en Ultra Wide (0.5x)</small></div>
         <video id="webcam" autoplay playsinline muted></video>
     </div>
 
@@ -120,7 +119,7 @@
             <button onclick="changeLens(6.0, 1.92, '54°', event)">6.0 mm</button>
             <button onclick="changeLens(12.0, 4.33, '24°', event)">12 mm</button>
         </div>
-        <button class="switch-btn" onclick="switchCamera()">🔄 Cambiar Cámara (Buscar Ultra Wide)</button>
+        <button class="switch-btn" onclick="switchCamera()">🔄 Cambiar Cámara Trasera</button>
     </div>
 
     <script>
@@ -135,8 +134,30 @@
         async function getCameras() {
             try {
                 const devices = await navigator.mediaDevices.enumerateDevices();
-                videoDevices = devices.filter(device => device.kind === 'videoinput');
-                currentDeviceIndex = videoDevices.length - 1;
+                
+                // 1. FILTRADO: Limpiar la lista para quedarse únicamente con sensores traseros
+                videoDevices = devices.filter(device => 
+                    device.kind === 'videoinput' && 
+                    !device.label.toLowerCase().includes('front') && 
+                    !device.label.toLowerCase().includes('frontal') && 
+                    !device.label.toLowerCase().includes('user') &&
+                    !device.label.toLowerCase().includes('selfie')
+                );
+
+                // 2. PRIORIZACIÓN: Buscar si alguna cámara trasera se etiqueta como ultra-wide
+                let ultraWideIndex = videoDevices.findIndex(d => 
+                    d.label.toLowerCase().includes('ultra') || 
+                    d.label.toLowerCase().includes('0.5') ||
+                    d.label.toLowerCase().includes('wide')
+                );
+                
+                if (ultraWideIndex !== -1) {
+                    currentDeviceIndex = ultraWideIndex;
+                } else {
+                    // Si el sistema no da nombres claros, empezamos desde la última trasera detectada
+                    currentDeviceIndex = videoDevices.length > 0 ? videoDevices.length - 1 : 0;
+                }
+                
                 initCamera();
             } catch (err) {
                 alert("Error al listar cámaras: " + err.message);
@@ -148,13 +169,30 @@
                 currentStream.getTracks().forEach(track => track.stop());
             }
 
-            if (videoDevices.length === 0) return;
+            if (videoDevices.length === 0) {
+                // Fallback de emergencia si el filtrado estricto de etiquetas falló
+                try {
+                    currentStream = await navigator.mediaDevices.getUserMedia({
+                        video: { 
+                            facingMode: { ideal: "environment" },
+                            advanced: [{ zoom: 0.5 }] // Tu truco aplicable de forma genérica
+                        }
+                    });
+                    video.srcObject = currentStream;
+                } catch (e) {
+                    alert("No se detectaron cámaras de entorno válidas.");
+                }
+                return;
+            }
 
+            // 3. CONSTRANITS CON ZOOM MENOR A 1 (0.5x)
             const constraints = {
                 video: {
                     deviceId: { exact: videoDevices[currentDeviceIndex].deviceId },
                     width: { ideal: 1920 },
-                    height: { ideal: 1080 }
+                    height: { ideal: 1080 },
+                    // 'advanced' no rompe la ejecución si el hardware específico no soporta el zoom < 1
+                    advanced: [{ zoom: 0.5 }] 
                 },
                 audio: false
             };
@@ -163,20 +201,25 @@
                 currentStream = await navigator.mediaDevices.getUserMedia(constraints);
                 video.srcObject = currentStream;
             } catch (err) {
+                // Si la restricción del zoom falla de forma estricta en un ID dado, reintenta limpio
                 try {
                     currentStream = await navigator.mediaDevices.getUserMedia({
-                        video: { facingMode: { ideal: "environment" } }
+                        video: { 
+                            deviceId: { exact: videoDevices[currentDeviceIndex].deviceId },
+                            width: { ideal: 1920 },
+                            height: { ideal: 1080 }
+                        }
                     });
                     video.srcObject = currentStream;
                 } catch (e) {
-                    alert("Error al acceder a la cámara: " + e.message);
+                    alert("Error al encender el lente seleccionado: " + e.message);
                 }
             }
         }
 
         function switchCamera() {
             if (videoDevices.length <= 1) {
-                alert("No se detectaron múltiples cámaras.");
+                alert("No se detectaron más cámaras traseras independientes.");
                 return;
             }
             currentDeviceIndex = (currentDeviceIndex + 1) % videoDevices.length;
@@ -185,7 +228,7 @@
 
         function changeLens(lensSize, zoomFactor, fov, event) {
             video.style.transform = `scale(${zoomFactor})`;
-            info.innerHTML = `Lente: ${lensSize}mm (FOV: ~${fov})<br><small style="color: #bbb;">Usa el lente 0.5x de tu celular para precisión</small>`;
+            info.innerHTML = `Lente: ${lensSize}mm (FOV: ~${fov})<br><small style="color: #bbb;">Simulación basada en rango ultra gran angular</small>`;
             buttons.forEach(btn => btn.classList.remove('active'));
             if (event && event.target) {
                 event.target.classList.add('active');
